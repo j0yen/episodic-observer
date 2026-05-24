@@ -1,0 +1,149 @@
+{
+  "schema": "autobuilder.intent_card.v1",
+  "prd_source": "/home/jsy/projects/autobuilder/PRD-episodic-observer.md",
+  "intent_slug": "episodic-observer",
+  "root_motivation": "Recall ships an `episodic` memory kind, but nothing populates it. I write semantic+reflective memories explicitly; episodic patterns (try/fail/retry, user-redirect, tool-thrash) never land because they require an *observer*, not an author. This slice ships an end-of-session JSONL detector that surfaces the loadbearing patterns and emits candidate memories. Stop-hook integration + recall-write are downstream; this slice ends at `episode observe --dry-run <jsonl>` producing well-typed candidates a downstream writer can consume.",
+  "user_persona": "Future Claude sessions on this laptop, invoked from a Stop hook after a session ends. Also: jsy manually testing detectors via `episode observe --dry-run <session.jsonl>` to see what would land in recall before wiring the hook. Pure CLI; no daemon.",
+  "unfakeable_metric": {
+    "name": "acceptance_tests_passing_count",
+    "lower_is_better": false,
+    "harness_command": "bash scripts/run-metrics.sh && jq -r '.scalars.acceptance_tests_passing_count' target/autobuilder/metrics.json",
+    "target": null
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "level": "MUST",
+      "description": "CLI binary `episode` accepts subcommand `observe <jsonl-path>` and parses a fixture JSONL stream of session events without panicking. Exit 0 when the fixture has no detector matches; emit nothing to stdout.",
+      "test": "tests/acceptance_ac1.rs"
+    },
+    {
+      "id": "AC2",
+      "level": "MUST",
+      "description": "`episode observe --dry-run <jsonl-path>` emits a JSON array of candidate memories to stdout, each with `{detector, subject, body, evidence: [{session, turn, excerpt}]}`. Without `--dry-run` the CLI emits nothing on stdout (writing is downstream).",
+      "test": "tests/acceptance_ac2.rs"
+    },
+    {
+      "id": "AC3",
+      "level": "MUST",
+      "description": "`episode detectors` lists the available detector names to stdout, one per line. At minimum: `revert`, `user-redirect`, `retry-with-tweak`. Exit 0.",
+      "test": "tests/acceptance_ac3.rs"
+    },
+    {
+      "id": "AC4",
+      "level": "MUST",
+      "description": "The `user-redirect` detector fires when a user-role message starts with a redirect keyword (one of: `no`, `stop`, `don't`, `dont`, `actually`, `wait`) within 2 turns of an assistant-role tool-use. Produces a candidate with `detector: \"user-redirect\"`, the literal quote as `excerpt`, and the turn index.",
+      "test": "tests/acceptance_ac4.rs"
+    },
+    {
+      "id": "AC5",
+      "level": "MUST",
+      "description": "The `revert` detector fires when an Edit or Write tool-use is followed within 5 turns by another Edit/Write that returns the same path's content to its pre-change state (textual revert). Produces a candidate with `detector: \"revert\"`, both turn indices in evidence, and the path that was reverted.",
+      "test": "tests/acceptance_ac5.rs"
+    },
+    {
+      "id": "AC6",
+      "level": "MUST",
+      "description": "The `retry-with-tweak` detector fires when a Bash tool-use exits non-zero, followed within 3 turns by another Bash tool-use with a similar command (Jaccard token similarity ≥ 0.5 ignoring whitespace) that exits zero. Produces a candidate with `detector: \"retry-with-tweak\"`, both commands as evidence excerpts.",
+      "test": "tests/acceptance_ac6.rs"
+    },
+    {
+      "id": "AC7",
+      "level": "MUST",
+      "description": "`--max-memories <N>` caps the total number of emitted candidates across all detectors. Default cap is 5. When the cap is reached the CLI stops emitting and exits 0; surplus matches are dropped silently.",
+      "test": "tests/acceptance_ac7.rs"
+    },
+    {
+      "id": "AC8",
+      "level": "MUST",
+      "description": "Each emitted candidate's `subject` field is derived as `project:<basename of cwd>` when run from a project dir, falling back to `project:unknown` when cwd is `/` or unset. Subject is included in JSON output and is deterministic per-fixture.",
+      "test": "tests/acceptance_ac8.rs"
+    },
+    {
+      "id": "AC9",
+      "level": "MUST",
+      "description": "Invocation errors (missing JSONL path, unreadable file, malformed CLI args) → exit code 2 with a single-line diagnostic on stderr. Malformed JSONL lines mid-stream → skip the line, log to stderr, continue.",
+      "test": "tests/acceptance_ac9.rs"
+    },
+    {
+      "id": "AC10",
+      "level": "SHOULD",
+      "description": "Idempotency: running `episode observe --dry-run <fixture>` twice produces byte-identical stdout. Ordering of candidates is deterministic (sorted by detector name, then turn index).",
+      "test": "tests/acceptance_ac10.rs"
+    }
+  ],
+  "scope": [
+    "Rust 2024 CLI crate `episodic-observer` producing an `episode` binary.",
+    "Streaming JSONL parser over Claude Code session journals.",
+    "Three Phase-0 detectors: revert, user-redirect, retry-with-tweak.",
+    "Candidate emission as JSON array (--dry-run) or via stdout (no-op for now; writer integration is downstream).",
+    "Configurable cap (--max-memories) on emitted candidates.",
+    "Per-session subject derivation (project:<basename of cwd>).",
+    "Deterministic output ordering for repeatable testing.",
+    "Acceptance + proptest fixtures committed under tests/fixtures/."
+  ],
+  "non_goals": [
+    "No Stop-hook installation in this slice (the hook script is one line; lives outside autobuilder).",
+    "No `recall write` integration in this slice (writer is downstream — observe emits candidates; another tool consumes).",
+    "No `~/.claude/episode-spool/` drainage (spool fallback is Phase 1+).",
+    "No `tool-thrash`, `skill-rejected`, `successful-novelty` detectors (Phase 1+).",
+    "No PostToolUse observation; Stop-only granularity.",
+    "No content-analysis of code changes (detectors look at session-event structure, not code semantics).",
+    "No editorial framing — detector output preserves literal quotes/excerpts; no LLM-generated rephrasing.",
+    "No cross-session correlation (this slice sees one JSONL per invocation).",
+    "No network calls at runtime."
+  ],
+  "hard_constraints": {
+    "rust_edition": "2024",
+    "target_kind": "cli",
+    "deny_unsafe": true,
+    "max_deps": 10,
+    "additional": {
+      "deterministic_output": true,
+      "no_network_at_runtime": true,
+      "single_binary": true
+    }
+  },
+  "five_whys_trace": [
+    {
+      "why": 1,
+      "q": "Why an end-of-session observer rather than PostToolUse instrumentation?",
+      "a": "PostToolUse fires per turn and can't see the *arc* of an attempt (try/fail/retry needs lookahead). Stop sees the whole session as a finite document; patterns are detectable in one pass."
+    },
+    {
+      "why": 2,
+      "q": "Why ship Phase 0 as `--dry-run` only (no recall write)?",
+      "a": "Detector quality matters more than wiring. Manual `--dry-run` runs against real session JSONLs let me tune detector thresholds before any memory ever lands in recall. Wiring is mechanical; tuning is the load-bearing work."
+    },
+    {
+      "why": 3,
+      "q": "Why three detectors (revert, user-redirect, retry-with-tweak) instead of all six from the PRD?",
+      "a": "These three have the cleanest event shape (single tool-use pair or single user-message check). The other three (tool-thrash, skill-rejected, successful-novelty) require richer state or file-system inspection — better to ship the easy three first and iterate."
+    },
+    {
+      "why": 4,
+      "q": "Why a max-5 cap?",
+      "a": "Detectors are heuristic. Unbounded emission risks filling the memory store with noise per session. Five episodic memories per session is enough to cover the loadbearing patterns; more is over-fitting on a single day's pathology."
+    },
+    {
+      "why": 5,
+      "q": "Why subject = project:<basename of cwd>?",
+      "a": "Episodic memories about coding work are most useful scoped to a project. Pattern: 'when working on autobuilder, I tried X and X failed' is more recallable than the same fact filed under subject:self."
+    }
+  ],
+  "ambiguities_resolved": [
+    {
+      "question": "Are 'revert' detections only edits to the same path, or also cross-path semantic reverts?",
+      "resolution": "Same-path textual reverts only in this slice. Cross-path semantic reverts are too speculative for a syntactic detector."
+    },
+    {
+      "question": "What's the similarity threshold for `retry-with-tweak`?",
+      "resolution": "Jaccard token similarity ≥ 0.5 (ignoring whitespace). Tunable later; this lets `cargo test foo` → `cargo test foo --release` match without matching `cargo test` → `git log`."
+    },
+    {
+      "question": "What format do session JSONLs take?",
+      "resolution": "Claude Code's session.jsonl — newline-delimited JSON, one event per line, with fields `type`, `role`, `content`, `tool_calls` (varies by version). The parser is best-effort: any line that parses to an object is included; non-object lines are skipped with stderr."
+    }
+  ],
+  "created_at": "2026-05-23T00:30:00Z"
+}
