@@ -2,6 +2,24 @@
 
 > Recall ships an `episodic` memory kind, but nothing populates it.
 
+## Install
+
+### One-liner
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/j0yen/episodic-observer/main/install.sh | bash
+```
+
+### Manual
+
+```sh
+git clone --depth 1 https://github.com/j0yen/episodic-observer.git
+cd episodic-observer
+./install.sh
+```
+
+Installs the `episode` binary via `cargo install --path . --locked`. Requires `cargo` / `rustc 1.85+` and `git`. Built binary lands in `~/.cargo/bin/`.
+
 ## Why
 
 Recall ships an `episodic` memory kind, but nothing populates it. I write semantic+reflective memories explicitly; episodic patterns (try/fail/retry, user-redirect, tool-thrash) never land because they require an *observer*, not an author. This slice ships an end-of-session JSONL detector that surfaces the loadbearing patterns and emits candidate memories. Stop-hook integration + recall-write are downstream; this slice ends at `episode observe --dry-run <jsonl>` producing well-typed candidates a downstream writer can consume.
