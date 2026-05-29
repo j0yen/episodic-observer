@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/j0yen/episodic-observer/schema/episode-cross-session.schema.json",
+  "title": "Cross-session episodic candidate",
+  "description": "One candidate memory produced by `episode observe-cross`. See PRD-chord-cross-episode.md AC8.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "subject",
+    "participants",
+    "context",
+    "paths",
+    "t_first_unix",
+    "t_last_unix",
+    "evidence"
+  ],
+  "properties": {
+    "kind": { "const": "episodic-cross-session" },
+    "subject": { "type": "string", "minLength": 1 },
+    "participants": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "context": { "enum": ["corrective", "redundant", "rescue"] },
+    "paths": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "t_first_unix": { "type": "integer" },
+    "t_last_unix": { "type": "integer" },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session", "ts", "excerpt"],
+        "properties": {
+          "session": { "type": "string", "minLength": 1 },
+          "ts": { "type": "integer" },
+          "excerpt": { "type": "string" }
+        }
+      }
+    }
+  }
+}

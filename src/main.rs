@@ -8,6 +8,9 @@
 )]
 
 use clap::{Parser, Subcommand};
+use episodic_observer::cross::{
+    load_recent_sessions, now_unix, observe_cross, parse_since, write_proposals,
+};
 use episodic_observer::{DEFAULT_MAX_MEMORIES, DETECTORS, observe, parse_session};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -32,6 +35,31 @@ enum Command {
         #[arg(long, default_value_t = DEFAULT_MAX_MEMORIES)]
         max_memories: usize,
     },
+    /// Correlate episodic patterns across sessions modified in a window.
+    ///
+    /// iter-1: Detector 1 (corrective) — an error in one session followed
+    /// by a corrective write in another within 300s. Dry-run only.
+    ObserveCross {
+        /// Look-back window for session selection (e.g. `1h`, `30m`, `90s`).
+        #[arg(long, default_value = "2h")]
+        since: String,
+        /// Directory of session JSONLs to scan.
+        #[arg(long)]
+        transcripts_dir: PathBuf,
+        /// Print candidates as JSON to stdout. No proposal file is written
+        /// under `--dry-run`, even if `--write-proposals` is also passed.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Write each candidate as a recall proposal file under the
+        /// proposals dir (default `~/.claude/recall/proposals/cross-session/`).
+        /// Suppressed by `--dry-run`.
+        #[arg(long, default_value_t = false)]
+        write_proposals: bool,
+        /// Override the proposals output dir (mainly for tests). Defaults to
+        /// `~/.claude/recall/proposals/cross-session/`.
+        #[arg(long)]
+        proposals_dir: Option<PathBuf>,
+    },
     /// List known detector names, one per line.
     Detectors,
 }
@@ -47,6 +75,9 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Observe { jsonl, dry_run, max_memories } => {
             run_observe(&jsonl, dry_run, max_memories)
+        }
+        Command::ObserveCross { since, transcripts_dir, dry_run, write_proposals, proposals_dir } => {
+            run_observe_cross(&since, &transcripts_dir, dry_run, write_proposals, proposals_dir)
         }
         Command::Detectors => run_detectors(),
     }
@@ -86,6 +117,52 @@ fn derive_subject() -> String {
         Some(b) if !b.is_empty() => format!("project:{b}"),
         _ => String::from("project:unknown"),
     }
+}
+
+fn run_observe_cross(
+    since: &str,
+    transcripts_dir: &std::path::Path,
+    dry_run: bool,
+    write_props: bool,
+    proposals_dir: Option<PathBuf>,
+) -> ExitCode {
+    let Some(window) = parse_since(since) else {
+        eprintln!("episode: invalid --since value: {since}");
+        return ExitCode::from(2);
+    };
+    let sessions = match load_recent_sessions(transcripts_dir, window) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("episode: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let candidates = observe_cross(&sessions);
+    if dry_run {
+        if let Ok(s) = serde_json::to_string(&serde_json::json!(candidates)) {
+            println!("{s}");
+        }
+        // --dry-run never touches the filesystem, even with --write-proposals.
+        return ExitCode::from(0);
+    }
+    if write_props {
+        let dir = proposals_dir.unwrap_or_else(default_proposals_dir);
+        match write_proposals(&candidates, &dir, now_unix()) {
+            Ok(written) => println!("episode: wrote {} proposal(s) to {}", written.len(), dir.display()),
+            Err(e) => {
+                eprintln!("episode: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    ExitCode::from(0)
+}
+
+/// Default proposals output dir: `~/.claude/recall/proposals/cross-session/`.
+/// Falls back to a relative path if `$HOME` is unset.
+fn default_proposals_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+    home.join(".claude/recall/proposals/cross-session")
 }
 
 fn run_detectors() -> ExitCode {

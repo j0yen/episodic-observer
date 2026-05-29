@@ -30,6 +30,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+pub mod cross;
+
 /// Available detector names.
 pub const DETECTORS: &[&str] = &["retry-with-tweak", "revert", "user-redirect"];
 
