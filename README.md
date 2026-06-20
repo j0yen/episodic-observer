@@ -1,72 +1,77 @@
 # episodic-observer
 
-> Recall ships an `episodic` memory kind, but nothing populates it.
+`episode` reads Claude session transcripts after the fact and surfaces the patterns worth remembering — a try/fail/retry, a user redirect, a reverted edit — as candidate episodic memories for recall to keep.
+
+## Why it exists
+
+Recall ships an `episodic` memory kind, but nothing fills it. Semantic and reflective memories get written deliberately, because the session knows it learned something. Episodic patterns don't work that way: the moment you correct course or undo a change, you're busy doing the next thing, not narrating it. Catching those moments needs an observer reading the transcript, not an author writing as it happens. `episode` is that observer. It runs on the JSONL a session leaves behind and proposes the candidates a downstream writer can persist.
 
 ## Install
-
-### One-liner
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/j0yen/episodic-observer/main/install.sh | bash
 ```
 
-### Manual
+Or build it yourself — requires `cargo` and `rustc 1.85+`:
 
 ```sh
 git clone --depth 1 https://github.com/j0yen/episodic-observer.git
 cd episodic-observer
-./install.sh
+./install.sh        # cargo install --path . --locked → ~/.cargo/bin/episode
 ```
 
-Installs the `episode` binary via `cargo install --path . --locked`. Requires `cargo` / `rustc 1.85+` and `git`. Built binary lands in `~/.cargo/bin/`.
+## Quickstart
 
-## Why
-
-Recall ships an `episodic` memory kind, but nothing populates it. I write semantic+reflective memories explicitly; episodic patterns (try/fail/retry, user-redirect, tool-thrash) never land because they require an *observer*, not an author. This slice ships an end-of-session JSONL detector that surfaces the loadbearing patterns and emits candidate memories. Stop-hook integration + recall-write are downstream; this slice ends at `episode observe --dry-run <jsonl>` producing well-typed candidates a downstream writer can consume.
-
-## Build
+List the single-session detectors:
 
 ```sh
-cargo build --release
+$ episode detectors
+retry-with-tweak
+revert
+user-redirect
 ```
 
-Produces `target/release/episode`. Symlink into `~/.local/bin/` if you want it on `$PATH`.
-
-## Usage
+Inspect what a transcript would produce, without writing anything:
 
 ```sh
-episode --help
+$ episode observe --dry-run session.jsonl
+[
+  {
+    "detector": "user-redirect",
+    "subject": "project:my-repo",
+    "body": "...",
+    "evidence": [{ "session": "...", "turn": 12, "excerpt": "..." }]
+  }
+]
 ```
 
-## Audience
+Without `--dry-run`, `observe` emits nothing on stdout — writing to recall is a downstream concern. `--max-memories N` caps the candidates per session (default 5). Malformed JSONL lines are skipped with a note on stderr; the stream continues.
 
-Future Claude sessions on this laptop, invoked from a Stop hook after a session ends. Also: the author manually testing detectors via `episode observe --dry-run <session.jsonl>` to see what would land in recall before wiring the hook. Pure CLI; no daemon.
+## Detectors
 
-## Acceptance criteria
+**Single session** — `episode observe`:
 
-This project was scaffolded from a PRD via the `autobuilder` pipeline. The MUST-level acceptance criteria are:
+| Detector | Fires when |
+|---|---|
+| `user-redirect` | A user message opens with a redirect word (`no`, `stop`, `don't`, `actually`, `wait`) within two turns of an assistant tool-use. |
+| `revert` | An edit returns a file to its pre-change state within five turns. |
+| `retry-with-tweak` | A failing `Bash` command is followed within three turns by a similar one (token Jaccard ≥ 0.5) that succeeds. |
 
-- **AC1**: CLI binary `episode` accepts subcommand `observe <jsonl-path>` and parses a fixture JSONL stream of session events without panicking. Exit 0 when the fixture has no detector matches; emit nothing to stdout.
-- **AC2**: `episode observe --dry-run <jsonl-path>` emits a JSON array of candidate memories to stdout, each with `{detector, subject, body, evidence: [{session, turn, excerpt}]}`. Without `--dry-run` the CLI emits nothing on stdout (writing is dow...
-- **AC3**: `episode detectors` lists the available detector names to stdout, one per line. At minimum: `revert`, `user-redirect`, `retry-with-tweak`. Exit 0.
-- **AC4**: The `user-redirect` detector fires when a user-role message starts with a redirect keyword (one of: `no`, `stop`, `don't`, `dont`, `actually`, `wait`) within 2 turns of an assistant-role tool-use. Produces a candidate with `detector: "us...
-- **AC5**: The `revert` detector fires when an Edit or Write tool-use is followed within 5 turns by another Edit/Write that returns the same path's content to its pre-change state (textual revert). Produces a candidate with `detector: "revert"`, bo...
-- **AC6**: The `retry-with-tweak` detector fires when a Bash tool-use exits non-zero, followed within 3 turns by another Bash tool-use with a similar command (Jaccard token similarity ≥ 0.5 ignoring whitespace) that exits zero. Produces a candidate...
-- **AC7**: `--max-memories <N>` caps the total number of emitted candidates across all detectors. Default cap is 5. When the cap is reached the CLI stops emitting and exits 0; surplus matches are dropped silently.
-- **AC8**: Each emitted candidate's `subject` field is derived as `project:<basename of cwd>` when run from a project dir, falling back to `project:unknown` when cwd is `/` or unset. Subject is included in JSON output and is deterministic per-fixture.
-- **AC9**: Invocation errors (missing JSONL path, unreadable file, malformed CLI args) → exit code 2 with a single-line diagnostic on stderr. Malformed JSONL lines mid-stream → skip the line, log to stderr, continue.
+**Across sessions** — `episode observe-cross --since 2h --transcripts-dir <dir>`:
+correlates patterns across the transcripts modified in a window — corrective (one session errors on a path, another fixes it within 300s), redundant (two sessions editing the same file), and rescue (one session stalls, another picks up its slug and paths). It emits `episodic-cross-session` candidates and, with `--write-proposals`, writes recall proposal files (default `~/.claude/recall/proposals/cross-session/`). `--dry-run` prints to stdout and writes nothing.
 
-Each AC has a matching integration test under `tests/acceptance_ac<n>.rs`.
+## Where it fits
+
+Part of the recall memory stack. `episode` is the producer; recall is the consumer. Intended to run from a Stop hook after a session ends, feeding candidates into the recall write path — that wiring lives downstream of this repo.
+
+## Status
+
+The detectors and CLI are complete and covered by integration tests (one per acceptance criterion under `tests/`). `observe` is single-session; `observe-cross` is the cross-session correlator added in v0.2.0. The Stop-hook integration and the recall-write step are not in this repo — `episode` ends at producing well-typed candidates.
 
 ## Provenance
 
-Built via the [`autobuilder`](https://github.com/j0yen/autobuilder) pipeline (PRD intake -> intent-card -> scaffold -> iterate-and-prove). Originally consolidated as a subdir of the [`wintermute`](https://github.com/j0yen/wintermute) monorepo; this standalone repo is a fresh-init snapshot for easier consumption and distribution.
+Built via the [`autobuilder`](https://github.com/j0yen/autobuilder) pipeline (PRD → intent-card → scaffold → iterate-and-prove). Originally a subdir of the [`wintermute`](https://github.com/j0yen/wintermute) monorepo; this is a fresh-init standalone snapshot.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Apache-2.0 OR MIT, at your option ([LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT)).
